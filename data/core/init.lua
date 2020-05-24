@@ -1,4 +1,5 @@
 require "core.strict"
+local common = require "core.common"
 local config = require "core.config"
 local style = require "core.style"
 local command
@@ -9,6 +10,11 @@ local CommandView
 local Doc
 
 local core = {}
+
+
+-- the following line has been added for temporary backwards-compatibility with
+-- plugins. on the 1.05 release this will be removed:
+core.project_dir = "."
 
 
 local function project_scan_thread()
@@ -34,8 +40,8 @@ local function project_scan_thread()
     local dirs, files = {}, {}
 
     for _, file in ipairs(all) do
-      if not file:find("^%.") then
-        local file = path .. PATHSEP .. file
+      if not common.match_pattern(file, config.ignore_files) then
+        local file = (path ~= "." and path .. PATHSEP or "") .. file
         local info = system.get_file_info(file)
         if info and info.size < size_limit then
           info.filename = file
@@ -61,7 +67,7 @@ local function project_scan_thread()
   while true do
     -- get project files and replace previous table if the new table is
     -- different
-    local t = get_files(core.project_dir)
+    local t = get_files(".")
     if diff_files(core.project_files, t) then
       core.project_files = t
       core.redraw = true
@@ -87,12 +93,7 @@ function core.init()
   core.docs = {}
   core.threads = setmetatable({}, { __mode = "k" })
   core.project_files = {}
-  core.project_dir = "."
-
-  local info = ARGS[2] and system.get_file_info(ARGS[2])
-  if info and info.type == "dir" then
-    core.project_dir = ARGS[2]:gsub("[\\/]$", "")
-  end
+  core.redraw = true
 
   core.root_view = RootView()
   core.command_view = CommandView()
@@ -100,7 +101,6 @@ function core.init()
 
   core.root_view.root_node:split("down", core.command_view, true)
   core.root_view.root_node.b:split("down", core.status_view, true)
-  core.active_view = core.root_view.root_node.a.active_view
 
   core.add_thread(project_scan_thread)
   command.add_defaults()
@@ -119,6 +119,9 @@ function core.init()
   if got_plugin_error or got_user_error or got_project_error then
     command.perform("core:open-log")
   end
+
+  local info = ARGS[2] and system.get_file_info(ARGS[2])
+  system.chdir(info and info.type == "dir" and ARGS[2] or ".")
 end
 
 
@@ -165,7 +168,7 @@ end
 
 
 function core.load_project_module()
-  local filename = core.project_dir .. "/.lite_project.lua"
+  local filename = ".lite_project.lua"
   if system.get_file_info(filename) then
     return core.try(function()
       local fn, err = loadfile(filename)
@@ -185,6 +188,15 @@ function core.reload_module(name)
   if type(old) == "table" then
     for k, v in pairs(new) do old[k] = v end
     package.loaded[name] = old
+  end
+end
+
+
+function core.set_active_view(view)
+  assert(view, "Tried to set active view to nil")
+  if view ~= core.active_view then
+    core.last_active_view = core.active_view
+    core.active_view = view
   end
 end
 
@@ -306,11 +318,17 @@ function core.on_event(type, ...)
   elseif type == "mousewheel" then
     core.root_view:on_mouse_wheel(...)
   elseif type == "filedropped" then
-    local mx, my = core.root_view.mouse.x, core.root_view.mouse.y
-    local ok, doc = core.try(core.open_doc, select(1, ...))
-    if ok then
-      core.root_view:on_mouse_pressed("left", mx, my, 1)
-      core.root_view:open_doc(doc)
+    local filename, mx, my = ...
+    local info = system.get_file_info(filename)
+    if info and info.type == "dir" then
+      system.exec(string.format("%q %q", EXEFILE, filename))
+    else
+      local ok, doc = core.try(core.open_doc, filename)
+      if ok then
+        local node = core.root_view.root_node:get_child_overlapping_point(mx, my)
+        node:set_active_view(node.active_view)
+        core.root_view:open_doc(doc)
+      end
     end
   elseif type == "quit" then
     core.quit()
@@ -347,7 +365,10 @@ function core.step()
   -- update
   core.root_view.size.x, core.root_view.size.y = width, height
   core.root_view:update()
-  if not core.redraw then return end
+  if not core.redraw then
+    if not system.window_has_focus() then system.wait_event(0.5) end
+    return
+  end
   core.redraw = false
 
   -- close unreferenced docs

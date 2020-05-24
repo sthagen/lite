@@ -111,9 +111,8 @@ function CommandView:enter(text, submit, suggest, cancel)
     submit = submit or noop,
     suggest = suggest or noop,
     cancel = cancel or noop,
-    view = core.active_view
   }
-  core.active_view = self
+  core.set_active_view(self)
   self:update_suggestions()
   self.gutter_text_brightness = 100
   self.label = text .. ": "
@@ -122,7 +121,7 @@ end
 
 function CommandView:exit(submitted, inexplicit)
   if core.active_view == self then
-    core.active_view = self.state.view
+    core.set_active_view(core.last_active_view)
   end
   local cancel = self.state.cancel
   self.state = default_state
@@ -211,6 +210,7 @@ function CommandView:draw_line_gutter(idx, x, y)
   local pos = self.position
   local color = common.lerp(style.text, style.accent, self.gutter_text_brightness / 100)
   core.push_clip_rect(pos.x, pos.y, self:get_gutter_width(), self.size.y)
+  x = x + style.padding.x
   renderer.draw_text(self:get_font(), self.label, x, y + yoffset, color)
   core.pop_clip_rect()
 end
